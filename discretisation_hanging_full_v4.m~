@@ -1,0 +1,411 @@
+function [fout, Dfout] = discretisation_hanging_full_v4(v_in, parameters)
+%Provides discretised variables at relevant locations. Account for variable cell edge and network edge lengths in both
+%directions; implements centered scheme for both vorticity and stream
+%function; uses cubic interpolation for hanging nodes
+
+%Elisa Mantelli, Mar 17, 2020
+
+%psi grid
+psi_nodes = parameters.grid.psi.n_nodes.tot;                                   %number of nodes
+psi_nodes_virtual = parameters.grid.psi.n_nodes.tot_virtual;                   %number of nodes in the virtual network
+psi_up_node_ver = parameters.grid.psi.up_node.vert;                            %list (n_edges-by-1 vector) of 'upstream' node for each vertical edge
+psi_down_node_ver = parameters.grid.psi.down_node.vert;                        %list (n_edges-by-1 vector) of 'downstream' nodes for each vertical edge
+psi_up_node_hor = parameters.grid.psi.up_node.hor;   
+psi_down_node_hor = parameters.grid.psi.down_node.hor;                         %list (n_edges-by-1 vector) of 'downstream' nodes for each horizontal edge
+psi_coor_nodes_z = parameters.grid.psi.coor_nodes.z;
+
+psi_Delta_y_cell = parameters.grid.psi.Delta_y_cell;                                                              %length of cells, hor (list)
+psi_Delta_z_edge = psi_coor_nodes_z(psi_down_node_ver)-psi_coor_nodes_z(psi_up_node_ver);                         %list (n_edges-by-1 vector) of lengths of vertical cell edges; THIS MUST BE CONSTRUCTED FROM THE COORDINATES OF UP AND DOWN NODE!!
+psi_Delta_y_edge = psi_Delta_y_cell(psi_up_node_hor);                                                             %psi_coor_nodes_y(psi_down_node_hor)-psi_coor_nodes_y(psi_up_node_hor);          
+
+%vertical averaging
+psi_down_node_ver_virtual = parameters.grid.psi.down_node_virtual.vert;        %list (n_edges-by-1 vector) of 'downstream' nodes for each vertical edge
+psi_up_node_ver_virtual = parameters.grid.psi.up_node_virtual.vert;            %list (n_edges-by-1 vector) of 'upstream' node for each horizontal edge
+psi_downdown_node_ver_virtual = parameters.grid.psi.downdown_node_virtual.vert;
+psi_upup_node_ver_virtual = parameters.grid.psi.upup_node_virtual.vert;
+
+psi_coor_down_node_virtual_ver = parameters.grid.psi.coor_down_node_virtual_vert;
+psi_coor_up_node_virtual_ver = parameters.grid.psi.coor_up_node_virtual_vert;
+psi_coor_downdown_node_virtual_ver = parameters.grid.psi.coor_downdown_node_virtual_vert;
+psi_coor_upup_node_virtual_ver = parameters.grid.psi.coor_upup_node_virtual_vert;
+
+psi_coor_hor_cell_edges_z = parameters.grid.psi.coor_hor_cell_edges.z;
+
+%lateral averaging
+psi_down_node_hornedges = parameters.grid.psi.index_node_hdown;
+psi_up_node_hornedges = parameters.grid.psi.index_node_hup;
+psi_downdown_node_hornedges = parameters.grid.psi.index_node_hdowndown;
+psi_upup_node_hornedges = parameters.grid.psi.index_node_hupup;
+
+psi_coor_down_node_hornedges = parameters.grid.psi.coor_node_h_y.down;
+psi_coor_up_node_hornedges = parameters.grid.psi.coor_node_h_y.up;
+psi_coor_downdown_node_hornedges = parameters.grid.psi.coor_node_h_y.downdown;
+psi_coor_upup_node_hornedges = parameters.grid.psi.coor_node_h_y.upup;
+
+psi_coor_interp_virtualnodes_y = parameters.grid.psi.coor_node_virtual.y;
+
+%T grid
+T_nodes = parameters.grid.N.n_nodes.tot;                                   %number of nodes
+T_nodes_virtual = parameters.grid.N.n_nodes.tot_virtual; 
+T_bdy_nodes_bed = parameters.grid.N.bdy_nodes.bottom;
+T_bdy_nodes_top = parameters.grid.N.bdy_nodes.top;
+T_up_node_ver = parameters.grid.N.up_node.vert;                            %list (n_edges-by-1 vector) of 'upstream' node for each vertical edge
+T_down_node_ver = parameters.grid.N.down_node.vert;                        %list (n_edges-by-1 vector) of 'downstream' nodes for each vertical edge
+T_up_node_hor = parameters.grid.N.up_node.hor;                             %list (n_edges-by-1 vector) of 'upstream' node for each horizontal edge
+T_down_node_hor = parameters.grid.N.down_node.hor;                         %list (n_edges-by-1 vector) of 'downstream' nodes for each horizontal edge
+T_up_edge_hor = parameters.grid.N.up_edge.hor;
+T_down_edge_hor = parameters.grid.N.down_edge.hor;
+
+T_coor_nodes_z = parameters.grid.N.coor_nodes.z;
+
+T_Delta_z_cell = parameters.grid.N.Delta_z_cell;                                                              %list (n_edges-by-1 vector) of lengths of vertical cell edges;
+T_Delta_y_cell = parameters.grid.N.Delta_y_cell;                                                              %length of cells, hor (list)
+T_Delta_z_edge = T_coor_nodes_z(T_down_node_ver)-T_coor_nodes_z(T_up_node_ver);                         %list (n_edges-by-1 vector) of lengths of vertical cell edges; THIS MUST BE CONSTRUCTED FROM THE COORDINATES OF UP AND DOWN NODE!!
+T_Delta_y_edge = parameters.grid.N.Delta_y_edge;  %psi_coor_nodes_y(psi_down_node_hor)-psi_coor_nodes_y(psi_up_node_hor);                         %length of cells, hor (list)
+
+T_upnode_adv_ver = parameters.grid.N.up_node.adv_ver;
+T_downnode_adv_ver = parameters.grid.N.down_node.adv_ver;
+
+T_upnode_adv_hor = parameters.grid.N.up_node.adv_hor;
+T_downnode_adv_hor = parameters.grid.N.down_node.adv_hor;
+
+T_down_node_ver_virtual = parameters.grid.N.down_node_virtual.vert;        %list (n_edges-by-1 vector) of 'downstream' nodes for each vertical edge
+T_up_node_ver_virtual = parameters.grid.N.up_node_virtual.vert;            %list (n_edges-by-1 vector) of 'upstream' node for each horizontal edge
+
+%lateral averaging
+T_down_node_hornedges = parameters.grid.N.index_node_h.down;
+T_up_node_hornedges = parameters.grid.N.index_node_h.up;
+T_downdown_node_hornedges = parameters.grid.N.index_node_h.downdown;
+T_upup_node_hornedges = parameters.grid.N.index_node_h.upup;
+
+T_coor_down_node_hornedges = parameters.grid.N.coor_node_h_y.down;
+T_coor_up_node_hornedges = parameters.grid.N.coor_node_h_y.up;
+T_coor_downdown_node_hornedges = parameters.grid.N.coor_node_h_y.downdown;
+T_coor_upup_node_hornedges = parameters.grid.N.coor_node_h_y.upup;
+
+T_coor_interp_virtualnodes_y = parameters.grid.N.coor_node_virtual.y;
+
+%Tb grid
+Tb_nodes = parameters.grid.Tb.n_nodes.tot;                                   %number of nodes
+Tb_nodes_virtual = parameters.grid.Tb.n_nodes.tot_virtual; 
+Tb_up_node_ver = parameters.grid.Tb.up_node.vert;                            %list (n_edges-by-1 vector) of 'upstream' node for each vertical edge
+Tb_down_node_ver = parameters.grid.Tb.down_node.vert;                        %list (n_edges-by-1 vector) of 'downstream' nodes for each vertical edge
+Tb_up_node_hor = parameters.grid.Tb.up_node.hor;                             %list (n_edges-by-1 vector) of 'upstream' node for each horizontal edge
+Tb_down_node_hor = parameters.grid.Tb.down_node.hor;                         %list (n_edges-by-1 vector) of 'downstream' nodes for each horizontal edge
+
+Tb_down_node_ver_virtual = parameters.grid.Tb.down_node_virtual.vert;        %list (n_edges-by-1 vector) of 'downstream' nodes for each vertical edge
+Tb_up_node_ver_virtual = parameters.grid.Tb.up_node_virtual.vert;            %list (n_edges-by-1 vector) of 'upstream' node for each horizontal edge
+
+Tb_coor_nodes_z = parameters.grid.Tb.coor_nodes.z;
+Tb_coor_nodes_z_virtual = parameters.grid.Tb.coor_node_virtual.z;
+                                                   
+Tb_Delta_y_cell = parameters.grid.Tb.Delta_y_cell;                                                              %length of cells, hor (list)
+Tb_Delta_z_edge = Tb_coor_nodes_z(Tb_down_node_ver)-Tb_coor_nodes_z(Tb_up_node_ver);                         %list (n_edges-by-1 vector) of lengths of vertical cell edges; THIS MUST BE CONSTRUCTED FROM THE COORDINATES OF UP AND DOWN NODE!!
+Tb_Delta_z_edge_virtual = Tb_coor_nodes_z_virtual(Tb_down_node_ver_virtual)-Tb_coor_nodes_z_virtual(Tb_up_node_ver_virtual);  
+Tb_Delta_y_edge = parameters.grid.Tb.Delta_y_edge;            %length of cells, hor (list)
+
+%lateral averaging
+Tb_down_node_hornedges = parameters.grid.Tb.index_node_h.down;
+Tb_up_node_hornedges = parameters.grid.Tb.index_node_h.up;
+Tb_downdown_node_hornedges = parameters.grid.Tb.index_node_h.downdown;
+Tb_upup_node_hornedges = parameters.grid.Tb.index_node_h.upup;
+
+Tb_coor_down_node_hornedges = parameters.grid.Tb.coor_node_h_y.down;
+Tb_coor_up_node_hornedges = parameters.grid.Tb.coor_node_h_y.up;
+Tb_coor_downdown_node_hornedges = parameters.grid.Tb.coor_node_h_y.downdown;
+Tb_coor_upup_node_hornedges = parameters.grid.Tb.coor_node_h_y.upup;
+
+Tb_coor_interp_virtualnodes_y = parameters.grid.Tb.coor_node_virtual.y;
+
+%unpack input variable v_in
+%unpack input variable v_in v_in = [psi_in; omega_in; phi_in; u_in; p_in; T_in; Tb_in; psi_ghost; h_in; Q_in; Pi_in];
+psi = v_in(1:psi_nodes);
+omega = v_in(psi_nodes+1: 2*psi_nodes);
+phi = v_in(2*psi_nodes+1:2*psi_nodes+T_nodes);
+u = v_in(2*psi_nodes+T_nodes+1:2*psi_nodes+2*T_nodes);
+p = v_in(2*psi_nodes+2*T_nodes+1: 2*psi_nodes+3*T_nodes);
+T = v_in(2*psi_nodes+3*T_nodes+1: 2*psi_nodes+4*T_nodes);
+Tb = v_in(2*psi_nodes+4*T_nodes+1: 2*psi_nodes+4*T_nodes+Tb_nodes);
+
+%% lateral and vertical interpolation for psi grid
+%construct the weights of the polynomyal psi_h = c1*T_upup + c2*Tup + c3*Tdown +c4*Tdowndown
+coeff = coeff_polynomial;
+c1 = coeff.T_1(psi_coor_interp_virtualnodes_y, psi_coor_upup_node_hornedges, psi_coor_up_node_hornedges, psi_coor_down_node_hornedges, psi_coor_downdown_node_hornedges);
+c2 = coeff.T_2(psi_coor_interp_virtualnodes_y, psi_coor_upup_node_hornedges, psi_coor_up_node_hornedges, psi_coor_down_node_hornedges, psi_coor_downdown_node_hornedges);
+c3 = coeff.T_3(psi_coor_interp_virtualnodes_y, psi_coor_upup_node_hornedges, psi_coor_up_node_hornedges, psi_coor_down_node_hornedges, psi_coor_downdown_node_hornedges);
+c4 = coeff.T_4(psi_coor_interp_virtualnodes_y, psi_coor_upup_node_hornedges, psi_coor_up_node_hornedges, psi_coor_down_node_hornedges, psi_coor_downdown_node_hornedges);
+
+%lateral interpolation
+if parameters.flag1d == 0
+    interp_lat_psigrid = sparse(1:psi_nodes_virtual,psi_upup_node_hornedges,c1,psi_nodes_virtual,psi_nodes) + ...
+        sparse(1:psi_nodes_virtual,psi_up_node_hornedges,c2,psi_nodes_virtual,psi_nodes) + ...
+        sparse(1:psi_nodes_virtual,psi_down_node_hornedges,c3,psi_nodes_virtual,psi_nodes) + ...
+        sparse(1:psi_nodes_virtual,psi_downdown_node_hornedges,c4,psi_nodes_virtual,psi_nodes);
+elseif parameters.flag1d == 1
+    interp_lat_psigrid = spdiags(ones(psi_nodes,1),0,psi_nodes,psi_nodes);
+end
+
+%vertical interpolation
+%weights of the derivative evaluated at interface vert network edges
+if parameters.flag1d == 0
+    index_edge_interface = logical(psi_downdown_node_ver_virtual);
+    index_edge_interior = logical(~psi_downdown_node_ver_virtual);
+    n_edge_ver_virtual = length(psi_downdown_node_ver_virtual);
+    edge_list = 1: n_edge_ver_virtual;
+elseif parameters.flag1d == 1
+    index_edge_interface = [];
+    n_edge_ver_virtual = length(psi_down_node_ver);
+    edge_list = 1: n_edge_ver_virtual;
+    index_edge_interior = 1: length(edge_list);
+end
+
+cprime1 = coeff.prime_T1(psi_coor_hor_cell_edges_z(index_edge_interface),psi_coor_upup_node_virtual_ver(index_edge_interface),psi_coor_up_node_virtual_ver(index_edge_interface), psi_coor_down_node_virtual_ver(index_edge_interface), psi_coor_downdown_node_virtual_ver(index_edge_interface));
+cprime2 = coeff.prime_T2(psi_coor_hor_cell_edges_z(index_edge_interface),psi_coor_upup_node_virtual_ver(index_edge_interface),psi_coor_up_node_virtual_ver(index_edge_interface), psi_coor_down_node_virtual_ver(index_edge_interface), psi_coor_downdown_node_virtual_ver(index_edge_interface));
+cprime3 = coeff.prime_T3(psi_coor_hor_cell_edges_z(index_edge_interface),psi_coor_upup_node_virtual_ver(index_edge_interface),psi_coor_up_node_virtual_ver(index_edge_interface), psi_coor_down_node_virtual_ver(index_edge_interface), psi_coor_downdown_node_virtual_ver(index_edge_interface));
+cprime4 = coeff.prime_T4(psi_coor_hor_cell_edges_z(index_edge_interface),psi_coor_upup_node_virtual_ver(index_edge_interface),psi_coor_up_node_virtual_ver(index_edge_interface), psi_coor_down_node_virtual_ver(index_edge_interface), psi_coor_downdown_node_virtual_ver(index_edge_interface));
+
+diffup_psigrid = (sparse(edge_list(index_edge_interface), psi_up_node_ver_virtual(index_edge_interface),cprime2, n_edge_ver_virtual, psi_nodes_virtual) + ...
+    sparse(edge_list(index_edge_interface), psi_upup_node_ver_virtual(index_edge_interface),cprime1, n_edge_ver_virtual, psi_nodes_virtual) + ...
+    -sparse(edge_list(index_edge_interior), psi_up_node_ver_virtual(index_edge_interior), ones(length(edge_list(index_edge_interior)),1)./psi_Delta_z_edge(index_edge_interior), n_edge_ver_virtual, psi_nodes_virtual));
+
+diffdown_psigrid = (sparse(edge_list(index_edge_interface), psi_down_node_ver_virtual(index_edge_interface),cprime3, n_edge_ver_virtual, psi_nodes_virtual) + ...
+    sparse(edge_list(index_edge_interface), psi_downdown_node_ver_virtual(index_edge_interface),cprime4, n_edge_ver_virtual, psi_nodes_virtual) + ...
+    sparse(edge_list(index_edge_interior), psi_down_node_ver_virtual(index_edge_interior), ones(length(edge_list(index_edge_interior)),1)./psi_Delta_z_edge(index_edge_interior), n_edge_ver_virtual, psi_nodes_virtual));
+diff_psigrid = diffup_psigrid + diffdown_psigrid;
+
+fout.psi.grad = diff_psigrid*interp_lat_psigrid;
+
+% horizontal derivative
+diff_psigrid_hor = sparse(1:psi_nodes, psi_down_node_hor, 1./psi_Delta_y_edge, psi_nodes, psi_nodes) - ...
+    sparse(1:psi_nodes, psi_up_node_hor, 1./psi_Delta_y_edge, psi_nodes, psi_nodes);
+fout.psi.grad_hor = diff_psigrid_hor;
+
+
+%% interpolation and differentiation for T grid
+%construct the weights of the polynomyal psi_h = c1*T_upup + c2*Tup + c3*Tdown +c4*Tdowndown
+coeff = coeff_polynomial;
+c1 = coeff.T_1(T_coor_interp_virtualnodes_y, T_coor_upup_node_hornedges, T_coor_up_node_hornedges, T_coor_down_node_hornedges, T_coor_downdown_node_hornedges);
+c2 = coeff.T_2(T_coor_interp_virtualnodes_y, T_coor_upup_node_hornedges, T_coor_up_node_hornedges, T_coor_down_node_hornedges, T_coor_downdown_node_hornedges);
+c3 = coeff.T_3(T_coor_interp_virtualnodes_y, T_coor_upup_node_hornedges, T_coor_up_node_hornedges, T_coor_down_node_hornedges, T_coor_downdown_node_hornedges);
+c4 = coeff.T_4(T_coor_interp_virtualnodes_y, T_coor_upup_node_hornedges, T_coor_up_node_hornedges, T_coor_down_node_hornedges, T_coor_downdown_node_hornedges);
+
+%lateral interpolation on virtual network
+if parameters.flag1d == 0
+    interp_lat_Tgrid = sparse(1:T_nodes_virtual,T_upup_node_hornedges,c1,T_nodes_virtual,T_nodes) + ...
+        sparse(1:T_nodes_virtual,T_up_node_hornedges,c2,T_nodes_virtual,T_nodes) + ...
+        sparse(1:T_nodes_virtual,T_down_node_hornedges,c3,T_nodes_virtual,T_nodes) + ...
+        sparse(1:T_nodes_virtual,T_downdown_node_hornedges,c4,T_nodes_virtual,T_nodes);
+elseif parameters.flag1d == 1
+    interp_lat_Tgrid = spdiags(ones(T_nodes,1),0,T_nodes,T_nodes);
+end
+
+%vertical derivative
+Tn_edge_ver_virtual = length(T_up_node_ver_virtual);
+diffup_Tgrid = -sparse(1:Tn_edge_ver_virtual, T_up_node_ver_virtual, 1./T_Delta_z_edge, Tn_edge_ver_virtual, T_nodes_virtual);
+diffdown_Tgrid = sparse(1:Tn_edge_ver_virtual, T_down_node_ver_virtual, 1./T_Delta_z_edge, Tn_edge_ver_virtual, T_nodes_virtual);
+diff_Tgrid = diffup_Tgrid + diffdown_Tgrid;
+
+fout.T.grad = diff_Tgrid*interp_lat_Tgrid;
+
+%horizontal derivative
+diff_Tgrid_hor = sparse(1:T_nodes, T_down_node_hor, 1./T_Delta_y_edge, T_nodes, T_nodes) - ...
+    sparse(1:T_nodes, T_up_node_hor, 1./T_Delta_y_edge, T_nodes, T_nodes);
+fout.T.grad_hor = diff_Tgrid_hor;
+
+%horizontal averaging, value along hor edge
+hor_av_celledge = sparse(1:T_nodes,T_up_node_hor, T_Delta_y_cell(T_down_node_hor)./(T_Delta_y_cell(T_up_node_hor)+T_Delta_y_cell(T_down_node_hor)), T_nodes, T_nodes) + ...
+    sparse(1:T_nodes,T_down_node_hor, T_Delta_y_cell(T_up_node_hor)./(T_Delta_y_cell(T_up_node_hor)+T_Delta_y_cell(T_down_node_hor)), T_nodes, T_nodes);
+%horizontal averaging, value at cell center
+hor_av_cellcenter = sparse(1:T_nodes,T_up_edge_hor, 1/2*ones(T_nodes,1), T_nodes, T_nodes) + ...
+    sparse(1:T_nodes,T_down_edge_hor, 1/2*ones(T_nodes,1), T_nodes, T_nodes);
+
+%vertical averaging
+%fout.u_vert = (u_ver_down + u_ver_up)/2;
+ver_av_virtualedges = sparse(1:Tn_edge_ver_virtual,T_up_node_ver_virtual,1/2*ones(Tn_edge_ver_virtual,1),Tn_edge_ver_virtual,T_nodes_virtual) + ...
+    sparse(1:Tn_edge_ver_virtual,T_down_node_ver_virtual,1/2*ones(Tn_edge_ver_virtual,1),Tn_edge_ver_virtual,T_nodes_virtual);
+ver_av_virtualedges_downwind = sparse(1:Tn_edge_ver_virtual,T_down_node_ver_virtual,ones(Tn_edge_ver_virtual,1),Tn_edge_ver_virtual,T_nodes_virtual);
+fout.T.ver_av_virtualedges = ver_av_virtualedges;
+
+%lateral averaging, real network
+%u_vert_av = (fout.u_vert(T_upnode_adv_hor)+fout.u_vert(T_downnode_adv_hor))*1/2;
+Tn_edge_ver_adv = length(T_downnode_adv_hor);
+interp_lat_Tgrid_actual = sparse(1:Tn_edge_ver_adv, T_upnode_adv_hor,1/2*ones(Tn_edge_ver_adv,1), Tn_edge_ver_adv,Tn_edge_ver_virtual) + ...
+    sparse(1:Tn_edge_ver_adv, T_downnode_adv_hor,1/2*ones(Tn_edge_ver_adv,1), Tn_edge_ver_adv,Tn_edge_ver_virtual);
+fout.T.interp_lat_Tgrid_actual = interp_lat_Tgrid_actual;
+
+%vertical derivative at cell center
+Tn_edge_adv_ver = length(T_downnode_adv_ver);
+diffup_Tgrid_adv = -sparse(1:Tn_edge_adv_ver, T_upnode_adv_ver, 1./T_Delta_z_cell(length(T_bdy_nodes_top)+1:length(T_bdy_nodes_top)+length(T_upnode_adv_ver)), Tn_edge_adv_ver, Tn_edge_ver_adv);
+diffdown_Tgrid_adv = sparse(1:Tn_edge_adv_ver, T_downnode_adv_ver, 1./T_Delta_z_cell(length(T_bdy_nodes_top)+1:length(T_bdy_nodes_top)+length(T_upnode_adv_ver)), Tn_edge_adv_ver, Tn_edge_ver_adv);
+diff_Tgrid_adv = diffup_Tgrid_adv + diffdown_Tgrid_adv;
+fout.T.grad_adv = diff_Tgrid_adv*interp_lat_Tgrid_actual*ver_av_virtualedges*interp_lat_Tgrid;
+
+%value at cell center, vertically averaged
+ver_av_cellcenter = sparse(1:Tn_edge_adv_ver,T_upnode_adv_ver ,1/2*ones(Tn_edge_adv_ver,1),Tn_edge_adv_ver,Tn_edge_ver_adv)+...
+    sparse(1:Tn_edge_adv_ver,T_downnode_adv_ver ,1/2*ones(Tn_edge_adv_ver,1),Tn_edge_adv_ver,Tn_edge_ver_adv);
+
+%% lateral interpolation for Tb grid
+%construct the weights of the polynomyal psi_h = c1*T_upup + c2*Tup + c3*Tdown +c4*Tdowndown
+coeff = coeff_polynomial;
+c1 = coeff.T_1(Tb_coor_interp_virtualnodes_y, Tb_coor_upup_node_hornedges, Tb_coor_up_node_hornedges, Tb_coor_down_node_hornedges, Tb_coor_downdown_node_hornedges);
+c2 = coeff.T_2(Tb_coor_interp_virtualnodes_y, Tb_coor_upup_node_hornedges, Tb_coor_up_node_hornedges, Tb_coor_down_node_hornedges, Tb_coor_downdown_node_hornedges);
+c3 = coeff.T_3(Tb_coor_interp_virtualnodes_y, Tb_coor_upup_node_hornedges, Tb_coor_up_node_hornedges, Tb_coor_down_node_hornedges, Tb_coor_downdown_node_hornedges);
+c4 = coeff.T_4(Tb_coor_interp_virtualnodes_y, Tb_coor_upup_node_hornedges, Tb_coor_up_node_hornedges, Tb_coor_down_node_hornedges, Tb_coor_downdown_node_hornedges);
+
+%lateral interpolation
+if parameters.flag1d == 0
+    interp_lat_Tbgrid = sparse(1:Tb_nodes_virtual,Tb_upup_node_hornedges,c1,Tb_nodes_virtual,Tb_nodes) + ...
+        sparse(1:Tb_nodes_virtual,Tb_up_node_hornedges,c2,Tb_nodes_virtual,Tb_nodes) + ...
+        sparse(1:Tb_nodes_virtual,Tb_down_node_hornedges,c3,Tb_nodes_virtual,Tb_nodes) + ...
+        sparse(1:Tb_nodes_virtual,Tb_downdown_node_hornedges,c4,Tb_nodes_virtual,Tb_nodes);
+elseif parameters.flag1d == 1
+    interp_lat_Tbgrid = spdiags(ones(Tb_nodes,1),0,Tb_nodes,Tb_nodes);
+end
+
+%vertical derivative
+Tbn_edge_ver_virtual = length(Tb_up_node_ver_virtual);
+% OLD: diffup_Tbgrid = -sparse(1:Tbn_edge_ver_virtual, Tb_up_node_ver_virtual, 1./Tb_Delta_z_edge, Tbn_edge_ver_virtual, Tb_nodes_virtual);
+% diffdown_Tbgrid = sparse(1:Tbn_edge_ver_virtual, Tb_down_node_ver_virtual, 1./Tb_Delta_z_edge, Tbn_edge_ver_virtual, Tb_nodes_virtual);
+
+diffup_Tbgrid = -sparse(1:Tbn_edge_ver_virtual, Tb_up_node_ver_virtual, 1./Tb_Delta_z_edge_virtual, Tbn_edge_ver_virtual, Tb_nodes_virtual);
+diffdown_Tbgrid = sparse(1:Tbn_edge_ver_virtual, Tb_down_node_ver_virtual, 1./Tb_Delta_z_edge_virtual, Tbn_edge_ver_virtual, Tb_nodes_virtual);
+
+diff_Tbgrid = diffup_Tbgrid + diffdown_Tbgrid;
+
+fout.Tb.grad = diff_Tbgrid*interp_lat_Tbgrid;
+
+%horizontal derivative
+diff_Tbgrid_hor = sparse(1:Tb_nodes, Tb_down_node_hor, 1./Tb_Delta_y_edge, Tb_nodes, Tb_nodes) - ...
+    sparse(1:Tb_nodes, Tb_up_node_hor, 1./Tb_Delta_y_edge, Tb_nodes, Tb_nodes);
+fout.Tb.grad_hor = diff_Tbgrid_hor;
+
+%horizontal averaging, value along hor edge
+Tb_hor_av_celledge = sparse(1:Tb_nodes,Tb_up_node_hor, Tb_Delta_y_cell(Tb_down_node_hor)./(Tb_Delta_y_cell(Tb_up_node_hor)+Tb_Delta_y_cell(Tb_down_node_hor)), Tb_nodes, Tb_nodes) + ...
+    sparse(1:Tb_nodes,Tb_down_node_hor, Tb_Delta_y_cell(Tb_up_node_hor)./(Tb_Delta_y_cell(Tb_up_node_hor)+Tb_Delta_y_cell(Tb_down_node_hor)), Tb_nodes, Tb_nodes);
+fout.Tb.hor_av_celledge = Tb_hor_av_celledge;
+%vertical averaging
+%fout.u_vert = (u_ver_down + u_ver_up)/2;
+Tb_ver_av_virtualedges = sparse(1:Tbn_edge_ver_virtual,Tb_up_node_ver_virtual,1/2*ones(Tbn_edge_ver_virtual,1),Tbn_edge_ver_virtual,Tb_nodes_virtual) + ...
+    sparse(1:Tbn_edge_ver_virtual,Tb_down_node_ver_virtual,1/2*ones(Tbn_edge_ver_virtual,1),Tbn_edge_ver_virtual,Tb_nodes_virtual);
+fout.Tb.ver_av_virtualedges = Tb_ver_av_virtualedges;
+
+
+%% STREAM FUNCTION
+psi_virtual = interp_lat_psigrid*psi;
+fout.dpsi_dz = diff_psigrid*psi_virtual;
+fout.dpsi_dy = diff_psigrid_hor*psi;
+
+%derivatives
+Dfout.ddpsidy_dpsi = diff_psigrid_hor;
+Dfout.ddpsidz_dpsi = fout.psi.grad;
+
+%% VORTICITY
+omega_virtual = interp_lat_psigrid*omega;
+
+ %along edges
+fout.domega_dy = diff_psigrid_hor*omega;
+fout.domega_dz = diff_psigrid*omega_virtual;
+
+%derivatives
+Dfout.ddomegady_domega = diff_psigrid_hor;
+Dfout.ddomegadz_domega = fout.psi.grad;
+
+%% DOWNSTREAM VELOCITY
+u_virtual = interp_lat_Tgrid*u;
+%vertical averaging
+fout.u_vert = fout.T.ver_av_virtualedges*u_virtual;
+%horizontal averaging
+fout.u_hor = hor_av_celledge * u;
+%derivatives at cell edges
+fout.du_dy = diff_Tgrid_hor*u;
+fout.du_dz = diff_Tgrid *u_virtual;
+fout.u_virtual = u_virtual;
+%construct du_dy at u cell centres
+fout.du_dy_centre = hor_av_cellcenter * fout.du_dy; 
+
+%vertical derivative of u at cell centre (size is number of nodes minus
+%upper and bottom row. Those must be added separately.  
+u_vert_av = interp_lat_Tgrid_actual*fout.T.ver_av_virtualedges*u_virtual;
+fout.du_dz_centre = diff_Tgrid_adv * u_vert_av;
+fout.u_vert_centre = ver_av_cellcenter*u_vert_av;  %this also needs to be differentiated as du_dz_centre
+
+%jacobian
+Dfout.duhor_du = hor_av_celledge;
+Dfout.ddudy_du = diff_Tgrid_hor;
+Dfout.ddudz_du = diff_Tgrid *interp_lat_Tgrid;
+Dfout.ddudycentre_du =  hor_av_cellcenter*diff_Tgrid_hor;
+
+Dfout.d_dudzcentre_du = diff_Tgrid_adv *interp_lat_Tgrid_actual*fout.T.ver_av_virtualedges*interp_lat_Tgrid;
+Dfout.d_uvertcentre_du = ver_av_cellcenter*interp_lat_Tgrid_actual*fout.T.ver_av_virtualedges*interp_lat_Tgrid;
+Dfout.duvert_du =  fout.T.ver_av_virtualedges*interp_lat_Tgrid;
+
+%% PHI
+phi_virtual = interp_lat_Tgrid*phi;
+fout.phi_virtual = phi_virtual;
+%derivatives at cell edges
+fout.dphi_dy = diff_Tgrid_hor*phi;
+fout.dphi_dz = diff_Tgrid *phi_virtual;
+
+%jacobian
+Dfout.ddphidy_dphi = diff_Tgrid_hor;
+Dfout.ddphidz_dphi = diff_Tgrid*interp_lat_Tgrid;
+
+%% corrected pressure, p'
+p_virtual = interp_lat_Tgrid*p;
+
+%derivatives at cell edges
+fout.dp_dy = diff_Tgrid_hor*p;
+fout.dp_dz = diff_Tgrid *p_virtual;
+
+%jacobian
+Dfout.ddpdy_dp = diff_Tgrid_hor;
+Dfout.ddpdz_dp = diff_Tgrid*interp_lat_Tgrid;
+
+%% TEMPERATURE IN THE BED
+Tb_virtual = interp_lat_Tbgrid*Tb;
+fout.Tb_virtual = Tb_virtual;
+
+%derivatives at cell edges
+fout.dTb_dy = diff_Tbgrid_hor*Tb;
+fout.dTb_dz = diff_Tbgrid *Tb_virtual;
+
+%jacobian
+Dfout.ddTbdy_dTb = diff_Tbgrid_hor;
+Dfout.ddTbdz_dTb = diff_Tbgrid*interp_lat_Tbgrid;
+
+%% ICE TEMPERATURE
+
+T_virtual = interp_lat_Tgrid*T;
+%vertical averaging                                        
+fout.T_vert = fout.T.ver_av_virtualedges*T_virtual;
+fout.T_vert_downwind = ver_av_virtualedges_downwind*T_virtual;
+%horizontal averaging
+fout.T_hor = hor_av_celledge * T;
+
+%derivatives at cell edges
+fout.dT_dy = diff_Tgrid_hor*T;
+fout.dT_dz = diff_Tgrid *T_virtual;
+
+%jacobian
+Dfout.dThor_dT = hor_av_celledge;
+Dfout.dTver_dT = fout.T.ver_av_virtualedges*interp_lat_Tgrid;
+Dfout.dTverdownwind_dT = ver_av_virtualedges_downwind*interp_lat_Tgrid;
+
+Dfout.ddTdy_dT = diff_Tgrid_hor;
+Dfout.ddTdz_dT = diff_Tgrid*interp_lat_Tgrid;
+
+%% BED TEMPERATURE
+%T_bed at psi cell centres
+T_bed = T(T_bdy_nodes_bed);
+Tbed_upnode = circshift(1:length(T_bdy_nodes_bed),1,2);
+Tbed_downnode = 1:length(T_bdy_nodes_bed);
+fout.T_bed_psigrid = (T_bed(Tbed_upnode)+T_bed(Tbed_downnode))./2;
+
+%derivatives
+Dfout.dTbedpsigrid_dTbed_up = 1/2*ones(length(T_bdy_nodes_bed),1);
+Dfout.dTbedpsigrid_dTbed_down = 1/2*ones(length(T_bdy_nodes_bed),1);
+Dfout.index_dTbedpsigriddTbedup = Tbed_upnode;
+Dfout.index_dTbedpsigriddTbeddown = Tbed_downnode;
+
+
+
